@@ -380,6 +380,168 @@ def get_parameter_statistics(parameter_name, hours=24):
         return {}
 
 
+def get_database_statistics():
+    """
+    Get general database statistics for the dashboard.
+    
+    Returns:
+        dict: Dictionary containing database statistics
+    """
+    try:
+        session = get_session()
+        if session is None:
+            return None
+        
+        # Get count of drilling data points
+        drilling_data_count = session.query(func.count(DrillingData.id)).scalar() or 0
+        
+        # Get count of predictions
+        predictions_count = session.query(func.count(Prediction.id)).scalar() or 0
+        
+        # Get count of alerts
+        alerts_count = session.query(func.count(Alert.id)).scalar() or 0
+        
+        # Get last write timestamp
+        last_drilling_data = session.query(DrillingData).order_by(desc(DrillingData.timestamp)).first()
+        last_write = last_drilling_data.timestamp if last_drilling_data else None
+        
+        # Close session
+        session.close()
+        
+        return {
+            'total_data_points': drilling_data_count,
+            'total_predictions': predictions_count,
+            'total_alerts': alerts_count,
+            'last_db_write': last_write
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting database statistics: {str(e)}")
+        if session:
+            session.close()
+        return None
+
+
+def get_alert_summary(hours=24, include_acknowledged=True):
+    """
+    Get a summary of alerts in the specified time period.
+    
+    Args:
+        hours (int): Number of hours to look back
+        include_acknowledged (bool): Whether to include acknowledged alerts
+        
+    Returns:
+        dict: Dictionary containing alert summary information
+    """
+    try:
+        session = get_session()
+        if session is None:
+            return None
+        
+        # Calculate time threshold
+        time_threshold = datetime.utcnow() - timedelta(hours=hours)
+        
+        # Base query
+        query = session.query(Alert).filter(Alert.timestamp >= time_threshold)
+        
+        # Filter out acknowledged alerts if specified
+        if not include_acknowledged:
+            query = query.filter(Alert.acknowledged == False)
+        
+        # Get all matching alerts
+        alerts = query.all()
+        
+        # Close session
+        session.close()
+        
+        if not alerts:
+            return {'alerts': [], 'counts_by_type': {}, 'counts_by_severity': {}}
+        
+        # Convert to dictionaries
+        alert_dicts = [alert.to_dict() for alert in alerts]
+        
+        # Count by type
+        counts_by_type = {}
+        for alert in alerts:
+            alert_type = alert.alert_type
+            if alert_type not in counts_by_type:
+                counts_by_type[alert_type] = 0
+            counts_by_type[alert_type] += 1
+        
+        # Count by severity
+        counts_by_severity = {}
+        for alert in alerts:
+            severity = alert.severity
+            if severity not in counts_by_severity:
+                counts_by_severity[severity] = 0
+            counts_by_severity[severity] += 1
+        
+        return {
+            'alerts': alert_dicts,
+            'counts_by_type': counts_by_type,
+            'counts_by_severity': counts_by_severity
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting alert summary: {str(e)}")
+        if session:
+            session.close()
+        return None
+
+
+def get_time_series_data(parameters, hours=24):
+    """
+    Get time series data for selected parameters in the specified time period.
+    
+    Args:
+        parameters (list): List of parameter names to retrieve
+        hours (int): Number of hours to look back
+        
+    Returns:
+        dict: Dictionary with timestamps and parameter values
+    """
+    try:
+        # Get drilling data within the time frame
+        drilling_data = get_drilling_data_in_timeframe(hours=hours)
+        
+        if not drilling_data:
+            return None
+        
+        # Map parameter names to model attributes
+        param_map = {
+            'WOB': 'wob',
+            'ROP': 'rop',
+            'RPM': 'rpm',
+            'Torque': 'torque',
+            'SPP': 'spp',
+            'Flow_Rate': 'flow_rate',
+            'ECD': 'ecd',
+            'MSE': 'mse'
+        }
+        
+        # Initialize result dictionary
+        result = {'timestamps': []}
+        for param in parameters:
+            result[param] = []
+        
+        # Populate result
+        for data_point in drilling_data:
+            result['timestamps'].append(data_point.timestamp)
+            
+            for param in parameters:
+                model_attr = param_map.get(param)
+                if model_attr and hasattr(data_point, model_attr):
+                    result[param].append(getattr(data_point, model_attr))
+                else:
+                    result[param].append(0)  # Default value if attribute not found
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error getting time series data: {str(e)}")
+        return None
+
+
 def get_risk_trend(agent_type, hours=24, interval_hours=1):
     """
     Get the risk trend for a specific agent over time.

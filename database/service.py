@@ -116,11 +116,12 @@ def get_time_series_data(parameter_names, hours=24):
         return {'timestamp': []}
 
 
-def get_alert_summary(include_acknowledged=False):
+def get_alert_summary(hours=24, include_acknowledged=False):
     """
     Get a summary of recent alerts.
     
     Args:
+        hours (int): Number of hours to look back
         include_acknowledged (bool): Whether to include acknowledged alerts
         
     Returns:

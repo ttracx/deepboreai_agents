@@ -15,7 +15,8 @@ from ml_agents import mechanical_sticking, differential_sticking, hole_cleaning,
 import orchestrator
 import config_manager
 import utils
-from database.service import initialize_database, save_drilling_cycle, get_time_series_data, get_alert_summary, get_agent_predictions_summary
+from database.service import initialize_database, save_drilling_cycle
+from database.repository import get_time_series_data, get_alert_summary, get_database_statistics
 
 # Set page configuration
 st.set_page_config(
@@ -27,11 +28,24 @@ st.set_page_config(
 
 # Initialize database
 if 'db_initialized' not in st.session_state:
-    st.session_state.db_initialized = initialize_database()
-    if st.session_state.db_initialized:
-        st.success("Database initialized successfully")
-    else:
-        st.error("Failed to initialize database")
+    try:
+        st.session_state.db_initialized = initialize_database()
+        if st.session_state.db_initialized:
+            st.success("Database initialized successfully")
+        else:
+            st.error("Failed to initialize database")
+    except Exception as e:
+        st.error(f"Database initialization error: {str(e)}")
+        st.session_state.db_initialized = False
+
+# Add database connection stats to session state
+if 'db_stats' not in st.session_state:
+    st.session_state.db_stats = {
+        'total_data_points': 0,
+        'total_predictions': 0,
+        'total_alerts': 0,
+        'last_db_write': None
+    }
 
 # Initialize session state for persistence across reruns
 if 'connection_status' not in st.session_state:
@@ -54,6 +68,26 @@ if 'predictions' not in st.session_state:
         'washout_mud_losses': None,
         'rop_optimization': None
     }
+if 'db_initialized' not in st.session_state:
+    st.session_state.db_initialized = initialize_database()
+if 'db_stats' not in st.session_state:
+    # Initialize database statistics
+    st.session_state.db_stats = {
+        'last_db_write': None,
+        'total_data_points': 0,
+        'total_predictions': 0,
+        'total_alerts': 0
+    }
+    
+    # If database is connected, try to load initial stats
+    if st.session_state.db_initialized:
+        try:
+            # Get database statistics
+            db_stats = get_database_statistics()
+            if db_stats:
+                st.session_state.db_stats.update(db_stats)
+        except Exception as e:
+            st.error(f"Error loading database statistics: {str(e)}")
 
 # Function for real-time data simulation and processing
 def update_data():
@@ -91,11 +125,20 @@ def update_data():
                 # Save data to database
                 if st.session_state.db_initialized:
                     try:
-                        save_drilling_cycle(
+                        # Save data to database
+                        success = save_drilling_cycle(
                             processed_data,
                             st.session_state.predictions,
                             new_alerts
                         )
+                        
+                        if success:
+                            # Update database stats in session state
+                            st.session_state.db_stats['last_db_write'] = datetime.now()
+                            st.session_state.db_stats['total_data_points'] += 1
+                            if new_alerts:
+                                st.session_state.db_stats['total_alerts'] += len(new_alerts)
+                            st.session_state.db_stats['total_predictions'] += len(st.session_state.predictions)
                     except Exception as e:
                         st.error(f"Error saving data to database: {str(e)}")
             
@@ -112,6 +155,32 @@ st.title("Real-Time Drilling NPT/ILT Prediction System")
 # Sidebar for configuration
 with st.sidebar:
     st.subheader("Configuration")
+    
+    # Database Status Indicator
+    st.write("### Database Status")
+    if st.session_state.db_initialized:
+        st.success("✅ Database Connected")
+        
+        # Show basic db stats if available
+        if st.session_state.db_stats['last_db_write']:
+            st.info(f"Last Write: {st.session_state.db_stats['last_db_write'].strftime('%Y-%m-%d %H:%M:%S')}")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Data Points", st.session_state.db_stats['total_data_points'])
+            with col2:
+                st.metric("Alerts", st.session_state.db_stats['total_alerts'])
+    else:
+        st.error("❌ Database Not Connected")
+        if st.button("Retry Database Connection"):
+            try:
+                st.session_state.db_initialized = initialize_database()
+                if st.session_state.db_initialized:
+                    st.success("Database reconnected successfully")
+                    st.rerun()
+                else:
+                    st.error("Failed to reconnect to database")
+            except Exception as e:
+                st.error(f"Database reconnection error: {str(e)}")
     
     # WITSML Connection Settings
     st.write("### WITSML Connection")
@@ -460,11 +529,39 @@ if st.session_state.connection_status:
     with tab3:
         st.subheader("Historical Performance")
         
-        # Time range selector
-        time_range = st.selectbox(
-            "Select Time Range", 
-            ["Last Hour", "Last 4 Hours", "Last 12 Hours", "Last 24 Hours"]
-        )
+        # Create columns for quick time selectors
+        st.write("### Data Time Range")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        # Quick time range buttons
+        with col1:
+            hour_btn = st.button("Last Hour")
+        with col2:
+            hours4_btn = st.button("Last 4 Hours")
+        with col3:
+            hours12_btn = st.button("Last 12 Hours")
+        with col4:
+            day_btn = st.button("Last Day")
+            
+        # Store the selection in session state if not already present
+        if 'historical_time_range' not in st.session_state:
+            st.session_state.historical_time_range = "Last Hour"
+            
+        # Update time range based on button clicks
+        if hour_btn:
+            st.session_state.historical_time_range = "Last Hour"
+        elif hours4_btn:
+            st.session_state.historical_time_range = "Last 4 Hours"
+        elif hours12_btn:
+            st.session_state.historical_time_range = "Last 12 Hours"
+        elif day_btn:
+            st.session_state.historical_time_range = "Last 24 Hours"
+            
+        # Display the current selection
+        st.info(f"Current selection: {st.session_state.historical_time_range}")
+        
+        # Use the stored time range
+        time_range = st.session_state.historical_time_range
         
         # Parameter selector
         selected_params = st.multiselect(
@@ -504,23 +601,44 @@ if st.session_state.connection_status:
                             ))
                     
                     fig_hist.update_layout(
-                        title="Historical Parameter Trends",
+                        title=f"Historical Parameter Trends ({time_range})",
                         height=500,
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                         margin=dict(l=20, r=20, t=30, b=20),
                     )
                     
                     st.plotly_chart(fig_hist, use_container_width=True)
+                    
+                    # Add some statistics for the selected parameters
+                    st.subheader("Parameter Statistics")
+                    stat_cols = st.columns(len(selected_params))
+                    
+                    for i, param in enumerate(selected_params):
+                        if param in historical_data:
+                            data = historical_data[param]
+                            with stat_cols[i]:
+                                st.metric(f"{param} Avg", f"{sum(data)/len(data):.2f}")
+                                st.metric(f"{param} Max", f"{max(data):.2f}")
+                                st.metric(f"{param} Min", f"{min(data):.2f}")
+                                # Calculate trend (up or down)
+                                if len(data) > 1:
+                                    trend = data[-1] - data[0]
+                                    st.metric(f"{param} Trend", 
+                                              f"{trend:.2f}", 
+                                              delta=f"{trend:.2f}")
                 else:
                     st.info("No historical data available for the selected time range")
             except Exception as e:
                 st.error(f"Error fetching historical data: {str(e)}")
             
             # Display alert history on timeline
-            if st.session_state.alerts:
-                st.subheader("Alert History")
-                
-                # Create timeline visualization
+            st.subheader("Alert History")
+            
+            # Create radio button to choose alert source
+            alert_source = st.radio("Select Alert Source", ["Current Session", "Database (All History)"], horizontal=True)
+            
+            if alert_source == "Current Session" and st.session_state.alerts:
+                # Use alerts from current session
                 alert_times = [datetime.strptime(alert['timestamp'], "%Y-%m-%d %H:%M:%S") for alert in st.session_state.alerts]
                 alert_types = [alert['type'] for alert in st.session_state.alerts]
                 
@@ -541,7 +659,7 @@ if st.session_state.connection_status:
                     ))
                 
                 fig_timeline.update_layout(
-                    title="Alert Timeline",
+                    title="Session Alert Timeline",
                     xaxis_title="Time",
                     yaxis_title="Alert Type",
                     height=300,
@@ -549,6 +667,75 @@ if st.session_state.connection_status:
                 )
                 
                 st.plotly_chart(fig_timeline, use_container_width=True)
+                
+                # Show alert count by type
+                st.subheader("Alert Counts")
+                alert_counts = {}
+                for alert in st.session_state.alerts:
+                    alert_type = alert['type']
+                    if alert_type not in alert_counts:
+                        alert_counts[alert_type] = 0
+                    alert_counts[alert_type] += 1
+                
+                # Display counts in columns
+                cols = st.columns(len(alert_counts))
+                for i, (alert_type, count) in enumerate(alert_counts.items()):
+                    with cols[i]:
+                        st.metric(f"{alert_type}", count)
+                
+            elif alert_source == "Database (All History)" and st.session_state.db_initialized:
+                try:
+                    # Try to get alerts from database for the same time period
+                    db_alerts = get_alert_summary(hours=hours, include_acknowledged=True)
+                    
+                    if db_alerts and db_alerts.get('alerts', []):
+                        alerts_data = db_alerts['alerts']
+                        
+                        # Create timeline of database alerts
+                        db_alert_times = [alert['timestamp'] for alert in alerts_data]
+                        db_alert_types = [alert['type'] for alert in alerts_data]
+                        
+                        fig_db_timeline = go.Figure()
+                        
+                        for i, alert_type in enumerate(set(db_alert_types)):
+                            # Filter alerts by type
+                            type_indices = [i for i, t in enumerate(db_alert_types) if t == alert_type]
+                            type_times = [db_alert_times[i] for i in type_indices]
+                            
+                            # Add scatter points for each alert type
+                            fig_db_timeline.add_trace(go.Scatter(
+                                x=type_times,
+                                y=[alert_type] * len(type_times),
+                                mode='markers',
+                                name=alert_type,
+                                marker=dict(size=12)
+                            ))
+                        
+                        fig_db_timeline.update_layout(
+                            title=f"Database Alert Timeline ({time_range})",
+                            xaxis_title="Time",
+                            yaxis_title="Alert Type",
+                            height=300,
+                            margin=dict(l=20, r=20, t=30, b=20),
+                        )
+                        
+                        st.plotly_chart(fig_db_timeline, use_container_width=True)
+                        
+                        # Show alert counts by severity
+                        if 'counts_by_severity' in db_alerts:
+                            st.subheader("Alerts by Severity")
+                            severity_cols = st.columns(len(db_alerts['counts_by_severity']))
+                            
+                            for i, (severity, count) in enumerate(db_alerts['counts_by_severity'].items()):
+                                with severity_cols[i]:
+                                    st.metric(f"{severity}", count)
+                    else:
+                        st.info("No alerts found in database for the selected time period")
+                        
+                except Exception as e:
+                    st.error(f"Error retrieving alerts from database: {str(e)}")
+            else:
+                st.info("No alerts available")
         else:
             st.info("Historical data not available yet")
     
