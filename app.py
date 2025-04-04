@@ -15,6 +15,7 @@ from ml_agents import mechanical_sticking, differential_sticking, hole_cleaning,
 import orchestrator
 import config_manager
 import utils
+from database.service import initialize_database, save_drilling_cycle, get_time_series_data, get_alert_summary, get_agent_predictions_summary
 
 # Set page configuration
 st.set_page_config(
@@ -23,6 +24,14 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Initialize database
+if 'db_initialized' not in st.session_state:
+    st.session_state.db_initialized = initialize_database()
+    if st.session_state.db_initialized:
+        st.success("Database initialized successfully")
+    else:
+        st.error("Failed to initialize database")
 
 # Initialize session state for persistence across reruns
 if 'connection_status' not in st.session_state:
@@ -78,6 +87,17 @@ def update_data():
                     st.session_state.alerts.extend(new_alerts)
                     # Keep only the last 50 alerts to prevent excessive memory usage
                     st.session_state.alerts = st.session_state.alerts[-50:]
+                
+                # Save data to database
+                if st.session_state.db_initialized:
+                    try:
+                        save_drilling_cycle(
+                            processed_data,
+                            st.session_state.predictions,
+                            new_alerts
+                        )
+                    except Exception as e:
+                        st.error(f"Error saving data to database: {str(e)}")
             
             # Sleep to control update frequency
             time.sleep(st.session_state.config['update_frequency'])
@@ -440,78 +460,95 @@ if st.session_state.connection_status:
     with tab3:
         st.subheader("Historical Performance")
         
-        if st.session_state.data is not None and 'time_series' in st.session_state.data:
-            # Time range selector
-            time_range = st.selectbox(
-                "Select Time Range", 
-                ["Last Hour", "Last 4 Hours", "Last 12 Hours", "Last 24 Hours"]
-            )
+        # Time range selector
+        time_range = st.selectbox(
+            "Select Time Range", 
+            ["Last Hour", "Last 4 Hours", "Last 12 Hours", "Last 24 Hours"]
+        )
+        
+        # Parameter selector
+        selected_params = st.multiselect(
+            "Select Parameters to Display",
+            ['WOB', 'ROP', 'RPM', 'Torque', 'SPP', 'Flow_Rate'],
+            default=['WOB', 'ROP']
+        )
+        
+        if selected_params and st.session_state.db_initialized:
+            # Convert time range to hours
+            hours_mapping = {
+                "Last Hour": 1,
+                "Last 4 Hours": 4,
+                "Last 12 Hours": 12,
+                "Last 24 Hours": 24
+            }
+            hours = hours_mapping.get(time_range, 24)
             
-            # Parameter selector
-            selected_params = st.multiselect(
-                "Select Parameters to Display",
-                ['WOB', 'ROP', 'RPM', 'Torque', 'SPP', 'Flow_Rate'],
-                default=['WOB', 'ROP']
-            )
-            
-            if selected_params:
-                # Create historical trend chart
-                fig_hist = go.Figure()
+            # Fetch time series data from database
+            try:
+                historical_data = get_time_series_data(selected_params, hours=hours)
                 
-                colors = px.colors.qualitative.Plotly
-                
-                for i, param in enumerate(selected_params):
-                    if param in st.session_state.data['time_series']:
-                        fig_hist.add_trace(go.Scatter(
-                            x=st.session_state.data['time_series']['timestamp'],
-                            y=st.session_state.data['time_series'][param],
-                            mode='lines',
-                            name=param,
-                            line=dict(color=colors[i % len(colors)])
-                        ))
-                
-                fig_hist.update_layout(
-                    title="Historical Parameter Trends",
-                    height=500,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                    margin=dict(l=20, r=20, t=30, b=20),
-                )
-                
-                st.plotly_chart(fig_hist, use_container_width=True)
-                
-                # Display alert history on timeline
-                if st.session_state.alerts:
-                    st.subheader("Alert History")
+                if historical_data and 'timestamps' in historical_data and len(historical_data['timestamps']) > 0:
+                    # Create historical trend chart
+                    fig_hist = go.Figure()
                     
-                    # Create timeline visualization
-                    alert_times = [datetime.strptime(alert['timestamp'], "%Y-%m-%d %H:%M:%S") for alert in st.session_state.alerts]
-                    alert_types = [alert['type'] for alert in st.session_state.alerts]
+                    colors = px.colors.qualitative.Plotly
                     
-                    fig_timeline = go.Figure()
+                    for i, param in enumerate(selected_params):
+                        if param in historical_data:
+                            fig_hist.add_trace(go.Scatter(
+                                x=historical_data['timestamps'],
+                                y=historical_data[param],
+                                mode='lines',
+                                name=param,
+                                line=dict(color=colors[i % len(colors)])
+                            ))
                     
-                    for i, alert_type in enumerate(set(alert_types)):
-                        # Filter alerts by type
-                        type_indices = [i for i, t in enumerate(alert_types) if t == alert_type]
-                        type_times = [alert_times[i] for i in type_indices]
-                        
-                        # Add scatter points for each alert type
-                        fig_timeline.add_trace(go.Scatter(
-                            x=type_times,
-                            y=[alert_type] * len(type_times),
-                            mode='markers',
-                            name=alert_type,
-                            marker=dict(size=12)
-                        ))
-                    
-                    fig_timeline.update_layout(
-                        title="Alert Timeline",
-                        xaxis_title="Time",
-                        yaxis_title="Alert Type",
-                        height=300,
+                    fig_hist.update_layout(
+                        title="Historical Parameter Trends",
+                        height=500,
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                         margin=dict(l=20, r=20, t=30, b=20),
                     )
                     
-                    st.plotly_chart(fig_timeline, use_container_width=True)
+                    st.plotly_chart(fig_hist, use_container_width=True)
+                else:
+                    st.info("No historical data available for the selected time range")
+            except Exception as e:
+                st.error(f"Error fetching historical data: {str(e)}")
+            
+            # Display alert history on timeline
+            if st.session_state.alerts:
+                st.subheader("Alert History")
+                
+                # Create timeline visualization
+                alert_times = [datetime.strptime(alert['timestamp'], "%Y-%m-%d %H:%M:%S") for alert in st.session_state.alerts]
+                alert_types = [alert['type'] for alert in st.session_state.alerts]
+                
+                fig_timeline = go.Figure()
+                
+                for i, alert_type in enumerate(set(alert_types)):
+                    # Filter alerts by type
+                    type_indices = [i for i, t in enumerate(alert_types) if t == alert_type]
+                    type_times = [alert_times[i] for i in type_indices]
+                    
+                    # Add scatter points for each alert type
+                    fig_timeline.add_trace(go.Scatter(
+                        x=type_times,
+                        y=[alert_type] * len(type_times),
+                        mode='markers',
+                        name=alert_type,
+                        marker=dict(size=12)
+                    ))
+                
+                fig_timeline.update_layout(
+                    title="Alert Timeline",
+                    xaxis_title="Time",
+                    yaxis_title="Alert Type",
+                    height=300,
+                    margin=dict(l=20, r=20, t=30, b=20),
+                )
+                
+                st.plotly_chart(fig_timeline, use_container_width=True)
         else:
             st.info("Historical data not available yet")
     
