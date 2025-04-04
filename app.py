@@ -26,26 +26,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Initialize database
-if 'db_initialized' not in st.session_state:
-    try:
-        st.session_state.db_initialized = initialize_database()
-        if st.session_state.db_initialized:
-            st.success("Database initialized successfully")
-        else:
-            st.error("Failed to initialize database")
-    except Exception as e:
-        st.error(f"Database initialization error: {str(e)}")
-        st.session_state.db_initialized = False
-
-# Add database connection stats to session state
-if 'db_stats' not in st.session_state:
-    st.session_state.db_stats = {
-        'total_data_points': 0,
-        'total_predictions': 0,
-        'total_alerts': 0,
-        'last_db_write': None
-    }
+# Initialize database and database stats - this will happen before session state is set up
 
 # Initialize session state for persistence across reruns
 if 'connection_status' not in st.session_state:
@@ -377,15 +358,24 @@ if st.session_state.connection_status:
     with tab2:
         st.subheader("Real-Time Predictions")
         
-        if st.session_state.predictions['mechanical_sticking'] is not None:
+        # Check if predictions have been initialized and contain actual data
+        all_predictions_ready = (
+            st.session_state.predictions['mechanical_sticking'] is not None and
+            st.session_state.predictions['differential_sticking'] is not None and
+            st.session_state.predictions['hole_cleaning'] is not None and
+            st.session_state.predictions['washout_mud_losses'] is not None
+        )
+        
+        if all_predictions_ready:
             # Display prediction gauges in columns
             col1, col2, col3 = st.columns(3)
             
             with col1:
                 # Mechanical Sticking Gauge
+                mech_stick_prob = st.session_state.predictions['mechanical_sticking'].get('probability', 0.0)
                 fig_mech = go.Figure(go.Indicator(
                     mode="gauge+number",
-                    value=st.session_state.predictions['mechanical_sticking']['probability'],
+                    value=mech_stick_prob,
                     title={'text': "Mechanical Sticking Risk"},
                     gauge={
                         'axis': {'range': [0, 1]},
@@ -406,9 +396,10 @@ if st.session_state.connection_status:
                 st.plotly_chart(fig_mech, use_container_width=True)
                 
                 # Differential Sticking Gauge
+                diff_stick_prob = st.session_state.predictions['differential_sticking'].get('probability', 0.0)
                 fig_diff = go.Figure(go.Indicator(
                     mode="gauge+number",
-                    value=st.session_state.predictions['differential_sticking']['probability'],
+                    value=diff_stick_prob,
                     title={'text': "Differential Sticking Risk"},
                     gauge={
                         'axis': {'range': [0, 1]},
@@ -430,9 +421,10 @@ if st.session_state.connection_status:
             
             with col2:
                 # Hole Cleaning Gauge
+                hole_cleaning_prob = st.session_state.predictions['hole_cleaning'].get('probability', 0.0)
                 fig_hole = go.Figure(go.Indicator(
                     mode="gauge+number",
-                    value=st.session_state.predictions['hole_cleaning']['probability'],
+                    value=hole_cleaning_prob,
                     title={'text': "Hole Cleaning Risk"},
                     gauge={
                         'axis': {'range': [0, 1]},
@@ -453,9 +445,10 @@ if st.session_state.connection_status:
                 st.plotly_chart(fig_hole, use_container_width=True)
                 
                 # Washout & Mud Losses Gauge
+                washout_prob = st.session_state.predictions['washout_mud_losses'].get('probability', 0.0)
                 fig_wash = go.Figure(go.Indicator(
                     mode="gauge+number",
-                    value=st.session_state.predictions['washout_mud_losses']['probability'],
+                    value=washout_prob,
                     title={'text': "Washout & Mud Losses Risk"},
                     gauge={
                         'axis': {'range': [0, 1]},
@@ -479,17 +472,25 @@ if st.session_state.connection_status:
                 # ROP Optimization
                 st.subheader("ROP Optimization")
                 
-                if 'recommended_parameters' in st.session_state.predictions['rop_optimization']:
+                if (st.session_state.predictions['rop_optimization'] is not None and 
+                    'recommended_parameters' in st.session_state.predictions['rop_optimization']):
                     rec_params = st.session_state.predictions['rop_optimization']['recommended_parameters']
                     
                     # Display recommended vs current parameters
-                    for param, value in rec_params.items():
-                        current_val = st.session_state.data.get(param, 0)
-                        st.metric(
-                            label=f"Recommended {param}", 
-                            value=f"{value:.1f}",
-                            delta=f"{value - current_val:.1f} from current"
-                        )
+                    if st.session_state.data is not None:
+                        for param, value in rec_params.items():
+                            current_val = st.session_state.data.get(param, 0)
+                            st.metric(
+                                label=f"Recommended {param}", 
+                                value=f"{value:.1f}",
+                                delta=f"{value - current_val:.1f} from current"
+                            )
+                    else:
+                        for param, value in rec_params.items():
+                            st.metric(
+                                label=f"Recommended {param}", 
+                                value=f"{value:.1f}"
+                            )
                     
                     # Expected ROP improvement
                     if 'expected_rop_improvement' in st.session_state.predictions['rop_optimization']:
@@ -501,6 +502,8 @@ if st.session_state.connection_status:
                         )
                 else:
                     st.info("ROP optimization data not available")
+        else:
+            st.info("Waiting for prediction data...")
         
         # Alerts section
         st.subheader("Recent Alerts")

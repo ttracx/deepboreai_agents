@@ -5,12 +5,16 @@ This module defines the database models for storing drilling data,
 predictions, alerts, and recommendations.
 """
 
+import logging
 import json
 from datetime import datetime
-from sqlalchemy import Column, Integer, Float, String, DateTime, Text, Boolean, ForeignKey, JSON
+from sqlalchemy import Column, Integer, Float, String, DateTime, Boolean, ForeignKey, JSON, Text
 from sqlalchemy.orm import relationship
 from database.connection import Base
 
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 class DrillingData(Base):
     """Model for storing raw drilling data."""
@@ -32,7 +36,15 @@ class DrillingData(Base):
     differential_pressure = Column(Float)
     hole_cleaning_index = Column(Float)
     
-    # Derived values and statistics
+    # Change metrics
+    wob_change = Column(Float)
+    rop_change = Column(Float)
+    rpm_change = Column(Float)
+    torque_change = Column(Float)
+    spp_change = Column(Float)
+    flow_rate_change = Column(Float)
+    
+    # Statistical metrics
     wob_avg = Column(Float)
     wob_std = Column(Float)
     wob_rate = Column(Float)  # Rate of change
@@ -68,72 +80,75 @@ class DrillingData(Base):
             'SPP': self.spp,
             'Flow_Rate': self.flow_rate,
             'ECD': self.ecd,
-            'Hook_Load': self.hook_load,
+            'hook_load': self.hook_load,
             'MSE': self.mse,
-            'Drag_Factor': self.drag_factor,
+            'drag_factor': self.drag_factor,
             'differential_pressure': self.differential_pressure,
             'hole_cleaning_index': self.hole_cleaning_index,
-            'WOB_avg': self.wob_avg,
-            'WOB_std': self.wob_std,
-            'WOB_rate': self.wob_rate,
-            'ROP_avg': self.rop_avg,
-            'ROP_std': self.rop_std,
-            'ROP_rate': self.rop_rate,
-            'RPM_avg': self.rpm_avg,
-            'RPM_std': self.rpm_std,
-            'RPM_rate': self.rpm_rate,
-            'Torque_avg': self.torque_avg,
-            'Torque_std': self.torque_std,
-            'Torque_rate': self.torque_rate,
-            'SPP_avg': self.spp_avg,
-            'SPP_std': self.spp_std,
-            'SPP_rate': self.spp_rate,
-            'Flow_Rate_avg': self.flow_rate_avg,
-            'Flow_Rate_std': self.flow_rate_std,
-            'Flow_Rate_rate': self.flow_rate_rate
+            'WOB_change': self.wob_change,
+            'ROP_change': self.rop_change,
+            'RPM_change': self.rpm_change,
+            'Torque_change': self.torque_change,
+            'SPP_change': self.spp_change,
+            'Flow_Rate_change': self.flow_rate_change,
+            'wob_avg': self.wob_avg,
+            'wob_std': self.wob_std,
+            'wob_rate': self.wob_rate,
+            'rop_avg': self.rop_avg,
+            'rop_std': self.rop_std,
+            'rop_rate': self.rop_rate,
+            'rpm_avg': self.rpm_avg,
+            'rpm_std': self.rpm_std,
+            'rpm_rate': self.rpm_rate,
+            'torque_avg': self.torque_avg,
+            'torque_std': self.torque_std,
+            'torque_rate': self.torque_rate,
+            'spp_avg': self.spp_avg,
+            'spp_std': self.spp_std,
+            'spp_rate': self.spp_rate,
+            'flow_rate_avg': self.flow_rate_avg,
+            'flow_rate_std': self.flow_rate_std,
+            'flow_rate_rate': self.flow_rate_rate
         }
     
     @classmethod
     def from_dict(cls, data_dict):
         """Create model from dictionary."""
-        drilling_data = cls()
+        # Map API names to database column names
+        mapping = {
+            'WOB': 'wob',
+            'ROP': 'rop',
+            'RPM': 'rpm',
+            'Torque': 'torque',
+            'SPP': 'spp',
+            'Flow_Rate': 'flow_rate',
+            'ECD': 'ecd',
+            'WOB_change': 'wob_change',
+            'ROP_change': 'rop_change',
+            'RPM_change': 'rpm_change',
+            'Torque_change': 'torque_change',
+            'SPP_change': 'spp_change',
+            'Flow_Rate_change': 'flow_rate_change'
+        }
         
-        drilling_data.timestamp = datetime.strptime(data_dict.get('timestamp'), "%Y-%m-%d %H:%M:%S") if data_dict.get('timestamp') else datetime.utcnow()
-        drilling_data.depth = data_dict.get('depth')
-        drilling_data.wob = data_dict.get('WOB')
-        drilling_data.rop = data_dict.get('ROP')
-        drilling_data.rpm = data_dict.get('RPM')
-        drilling_data.torque = data_dict.get('Torque')
-        drilling_data.spp = data_dict.get('SPP')
-        drilling_data.flow_rate = data_dict.get('Flow_Rate')
-        drilling_data.ecd = data_dict.get('ECD')
-        drilling_data.hook_load = data_dict.get('Hook_Load')
-        drilling_data.mse = data_dict.get('MSE')
-        drilling_data.drag_factor = data_dict.get('Drag_Factor')
-        drilling_data.differential_pressure = data_dict.get('differential_pressure')
-        drilling_data.hole_cleaning_index = data_dict.get('hole_cleaning_index')
+        # Create dictionary with database column names
+        db_dict = {}
+        for key, value in data_dict.items():
+            if key in mapping:
+                db_dict[mapping[key]] = value
+            elif key.lower() in cls.__table__.columns.keys():
+                db_dict[key.lower()] = value
         
-        # Derived values and statistics
-        drilling_data.wob_avg = data_dict.get('WOB_avg')
-        drilling_data.wob_std = data_dict.get('WOB_std')
-        drilling_data.wob_rate = data_dict.get('WOB_rate')
-        drilling_data.rop_avg = data_dict.get('ROP_avg')
-        drilling_data.rop_std = data_dict.get('ROP_std')
-        drilling_data.rop_rate = data_dict.get('ROP_rate')
-        drilling_data.rpm_avg = data_dict.get('RPM_avg')
-        drilling_data.rpm_std = data_dict.get('RPM_std')
-        drilling_data.rpm_rate = data_dict.get('RPM_rate')
-        drilling_data.torque_avg = data_dict.get('Torque_avg')
-        drilling_data.torque_std = data_dict.get('Torque_std')
-        drilling_data.torque_rate = data_dict.get('Torque_rate')
-        drilling_data.spp_avg = data_dict.get('SPP_avg')
-        drilling_data.spp_std = data_dict.get('SPP_std')
-        drilling_data.spp_rate = data_dict.get('SPP_rate')
-        drilling_data.flow_rate_avg = data_dict.get('Flow_Rate_avg')
-        drilling_data.flow_rate_std = data_dict.get('Flow_Rate_std')
-        drilling_data.flow_rate_rate = data_dict.get('Flow_Rate_rate')
+        # Handle timestamp conversion
+        if 'timestamp' in data_dict and isinstance(data_dict['timestamp'], str):
+            try:
+                db_dict['timestamp'] = datetime.strptime(data_dict['timestamp'], "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                # If timestamp format is different, use current time
+                db_dict['timestamp'] = datetime.utcnow()
         
-        return drilling_data
+        # Create model instance
+        return cls(**db_dict)
 
 
 class Prediction(Base):
@@ -146,15 +161,15 @@ class Prediction(Base):
     agent_type = Column(String(50), index=True)  # mechanical_sticking, differential_sticking, etc.
     probability = Column(Float)
     
-    # For ROP optimization agent
+    # For optimization models
     is_optimization = Column(Boolean, default=False)
     recommended_parameters = Column(JSON, nullable=True)
     expected_improvement = Column(Float, nullable=True)
     
-    # For washout/mud losses agent
+    # For washout/mud losses model
     issue_type = Column(String(50), nullable=True)  # Washout or Mud Losses
     
-    # For all prediction types
+    # Detailed prediction data
     contributing_factors = Column(JSON, nullable=True)
     recommendations = Column(JSON, nullable=True)
     
@@ -164,43 +179,93 @@ class Prediction(Base):
     
     def to_dict(self):
         """Convert model to dictionary."""
-        return {
+        result = {
             'id': self.id,
-            'drilling_data_id': self.drilling_data_id,
             'timestamp': self.timestamp.strftime("%Y-%m-%d %H:%M:%S") if self.timestamp else None,
             'agent_type': self.agent_type,
-            'probability': self.probability,
-            'is_optimization': self.is_optimization,
-            'recommended_parameters': self.recommended_parameters,
-            'expected_improvement': self.expected_improvement,
-            'issue_type': self.issue_type,
-            'contributing_factors': self.contributing_factors,
-            'recommendations': self.recommendations
+            'probability': self.probability
         }
+        
+        # Add optional fields if they exist
+        if self.is_optimization:
+            result['is_optimization'] = True
+            
+            if self.recommended_parameters:
+                try:
+                    if isinstance(self.recommended_parameters, str):
+                        result['recommended_parameters'] = json.loads(self.recommended_parameters)
+                    else:
+                        result['recommended_parameters'] = self.recommended_parameters
+                except:
+                    result['recommended_parameters'] = {}
+                    
+            if self.expected_improvement:
+                result['expected_rop_improvement'] = self.expected_improvement
+                
+        if self.issue_type:
+            result['issue_type'] = self.issue_type
+            
+        if self.contributing_factors:
+            try:
+                if isinstance(self.contributing_factors, str):
+                    result['contributing_factors'] = json.loads(self.contributing_factors)
+                else:
+                    result['contributing_factors'] = self.contributing_factors
+            except:
+                result['contributing_factors'] = []
+                
+        if self.recommendations:
+            try:
+                if isinstance(self.recommendations, str):
+                    result['recommendations'] = json.loads(self.recommendations)
+                else:
+                    result['recommendations'] = self.recommendations
+            except:
+                result['recommendations'] = []
+        
+        return result
     
     @classmethod
     def from_dict(cls, data_dict, agent_type, drilling_data_id=None):
         """Create model from dictionary."""
-        prediction = cls()
+        # Basic data
+        model_data = {
+            'agent_type': agent_type,
+            'probability': data_dict.get('probability', 0),
+            'drilling_data_id': drilling_data_id
+        }
         
-        prediction.drilling_data_id = drilling_data_id
-        prediction.timestamp = datetime.strptime(data_dict.get('timestamp'), "%Y-%m-%d %H:%M:%S") if data_dict.get('timestamp') else datetime.utcnow()
-        prediction.agent_type = agent_type
-        prediction.probability = data_dict.get('probability', 0.0)
+        # Handle timestamp
+        if 'timestamp' in data_dict and isinstance(data_dict['timestamp'], str):
+            try:
+                model_data['timestamp'] = datetime.strptime(data_dict['timestamp'], "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                # If timestamp format is different, use current time
+                model_data['timestamp'] = datetime.utcnow()
         
-        # ROP optimization specific fields
-        prediction.is_optimization = (agent_type == 'rop_optimization')
-        prediction.recommended_parameters = data_dict.get('recommended_parameters')
-        prediction.expected_improvement = data_dict.get('expected_rop_improvement')
+        # Handle optimization models
+        if data_dict.get('is_optimization', False):
+            model_data['is_optimization'] = True
+            
+            if 'recommended_parameters' in data_dict:
+                model_data['recommended_parameters'] = data_dict['recommended_parameters']
+                
+            if 'expected_rop_improvement' in data_dict:
+                model_data['expected_improvement'] = data_dict['expected_rop_improvement']
         
-        # Washout/mud losses specific fields
-        prediction.issue_type = data_dict.get('issue_type')
+        # Handle washout/mud losses models
+        if 'issue_type' in data_dict:
+            model_data['issue_type'] = data_dict['issue_type']
         
-        # Common fields
-        prediction.contributing_factors = data_dict.get('contributing_factors', [])
-        prediction.recommendations = data_dict.get('recommendations', [])
+        # Handle detailed prediction data
+        if 'contributing_factors' in data_dict:
+            model_data['contributing_factors'] = data_dict['contributing_factors']
+            
+        if 'recommendations' in data_dict:
+            model_data['recommendations'] = data_dict['recommendations']
         
-        return prediction
+        # Create model instance
+        return cls(**model_data)
 
 
 class Alert(Base):
@@ -224,7 +289,6 @@ class Alert(Base):
         """Convert model to dictionary."""
         return {
             'id': self.id,
-            'prediction_id': self.prediction_id,
             'timestamp': self.timestamp.strftime("%Y-%m-%d %H:%M:%S") if self.timestamp else None,
             'type': self.alert_type,
             'severity': self.severity,
@@ -237,15 +301,23 @@ class Alert(Base):
     @classmethod
     def from_dict(cls, data_dict, prediction_id=None):
         """Create model from dictionary."""
-        alert = cls()
+        model_data = {
+            'prediction_id': prediction_id,
+            'alert_type': data_dict.get('type', ''),
+            'severity': data_dict.get('severity', 'MEDIUM'),
+            'probability': data_dict.get('probability', '0%'),
+            'message': data_dict.get('message', ''),
+            'recommendation': data_dict.get('recommendation', ''),
+            'acknowledged': data_dict.get('acknowledged', False)
+        }
         
-        alert.prediction_id = prediction_id
-        alert.timestamp = datetime.strptime(data_dict.get('timestamp'), "%Y-%m-%d %H:%M:%S") if data_dict.get('timestamp') else datetime.utcnow()
-        alert.alert_type = data_dict.get('type', '')
-        alert.severity = data_dict.get('severity', 'LOW')
-        alert.probability = data_dict.get('probability', '0.0')
-        alert.message = data_dict.get('message', '')
-        alert.recommendation = data_dict.get('recommendation', '')
-        alert.acknowledged = data_dict.get('acknowledged', False)
+        # Handle timestamp
+        if 'timestamp' in data_dict and isinstance(data_dict['timestamp'], str):
+            try:
+                model_data['timestamp'] = datetime.strptime(data_dict['timestamp'], "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                # If timestamp format is different, use current time
+                model_data['timestamp'] = datetime.utcnow()
         
-        return alert
+        # Create model instance
+        return cls(**model_data)

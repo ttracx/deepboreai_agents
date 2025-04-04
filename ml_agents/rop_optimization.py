@@ -1,9 +1,12 @@
-import numpy as np
+"""
+ROP optimization agent.
+
+This module implements a machine learning agent for optimizing rate of penetration (ROP).
+"""
+
 import logging
+import numpy as np
 from datetime import datetime
-from sklearn.linear_model import Ridge
-import joblib
-import os
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -11,317 +14,241 @@ logger = logging.getLogger(__name__)
 
 class ROPOptimizationAgent:
     """
-    Physics-informed ML agent for optimizing rate of penetration (ROP).
+    Agent for optimizing rate of penetration (ROP) during drilling operations.
     
     This agent analyzes drilling parameters to recommend optimal settings
-    for maximizing ROP while maintaining safe drilling practices.
+    for maximizing ROP while maintaining safe drilling operations.
     """
     
-    def __init__(self):
-        # Initialize the optimization model
-        self.model = None
-        self.is_trained = False
+    def __init__(self, aggressiveness=0.6):
+        """
+        Initialize the ROP optimization agent.
         
-        # Physics constraints and configuration
-        self.constraints = {
-            'max_wob': 50,  # Maximum weight on bit (klbs)
-            'min_wob': 5,   # Minimum weight on bit (klbs)
-            'max_rpm': 180, # Maximum RPM
-            'min_rpm': 60,  # Minimum RPM
-            'max_flow': 800, # Maximum flow rate (gpm)
-            'min_flow': 400, # Minimum flow rate (gpm)
-            'max_torque': 15, # Maximum torque (kft-lbs)
-            'max_spp': 4500  # Maximum standpipe pressure (psi)
-        }
-        
-        # Optimization parameters
-        self.optimization_params = {
-            'wob_increment': 2,    # Increment for WOB testing (klbs)
-            'rpm_increment': 10,   # Increment for RPM testing
-            'learning_rate': 0.1,  # Learning rate for model updates
-            'history_window': 20,  # Number of data points to use for training
-            'training_frequency': 10  # How often to retrain the model (in data points)
-        }
-        
-        # Training data storage
-        self.training_data = {
-            'X': [],  # Input features (WOB, RPM, Flow, etc.)
-            'y': []   # Target (ROP)
-        }
-        
-        # Data point counter
-        self.data_counter = 0
-        
-        # Initialize the model
-        self._initialize_model()
-    
-    def _initialize_model(self):
-        """Initialize the ROP prediction model"""
-        # For this implementation, we'll use a simple Ridge regression model
-        # In a full system, more complex models like physics-informed neural networks would be used
-        self.model = Ridge(alpha=1.0)
-        
-        # If a pre-trained model exists, load it
-        if os.path.exists('rop_model.pkl'):
-            try:
-                self.model = joblib.load('rop_model.pkl')
-                self.is_trained = True
-                logger.info("Loaded pre-trained ROP model")
-            except Exception as e:
-                logger.warning(f"Could not load pre-trained model: {str(e)}")
-    
-    def _update_training_data(self, drilling_data):
-        """Update the training data with new drilling information"""
-        try:
-            # Extract features for ROP prediction
-            features = [
-                drilling_data.get('WOB', 0),           # Weight on bit
-                drilling_data.get('RPM', 0),           # Rotary speed
-                drilling_data.get('Flow_Rate', 0),     # Flow rate
-                drilling_data.get('Torque', 0),        # Torque
-                drilling_data.get('SPP', 0),           # Standpipe pressure
-                drilling_data.get('ECD', 12.5),        # Equivalent circulating density
-                drilling_data.get('MSE', 30000)        # Mechanical specific energy
-            ]
-            
-            # Target value is ROP
-            target = drilling_data.get('ROP', 0)
-            
-            # Add to training data
-            if target > 0:  # Only use valid ROP values
-                self.training_data['X'].append(features)
-                self.training_data['y'].append(target)
-                
-                # Keep only the most recent data points
-                window = self.optimization_params['history_window']
-                if len(self.training_data['X']) > window:
-                    self.training_data['X'] = self.training_data['X'][-window:]
-                    self.training_data['y'] = self.training_data['y'][-window:]
-                
-                self.data_counter += 1
-                
-                # Retrain the model periodically
-                if self.data_counter % self.optimization_params['training_frequency'] == 0:
-                    self._train_model()
-            
-        except Exception as e:
-            logger.error(f"Error updating training data: {str(e)}")
-    
-    def _train_model(self):
-        """Train the ROP prediction model with current data"""
-        try:
-            if len(self.training_data['X']) >= 5:  # Need minimum data points
-                # Convert to numpy arrays
-                X = np.array(self.training_data['X'])
-                y = np.array(self.training_data['y'])
-                
-                # Train the model
-                self.model.fit(X, y)
-                self.is_trained = True
-                
-                # Save the model (in a full implementation)
-                # joblib.dump(self.model, 'rop_model.pkl')
-                
-                logger.info(f"ROP model trained with {len(self.training_data['X'])} data points")
-            else:
-                logger.info("Not enough data points for ROP model training")
-                
-        except Exception as e:
-            logger.error(f"Error training ROP model: {str(e)}")
-    
-    def _optimize_parameters(self, current_data):
-        """Find optimal drilling parameters to maximize ROP"""
-        if not self.is_trained:
-            logger.info("ROP model not trained yet, using default recommendations")
-            return self._get_default_recommendations(current_data)
-        
-        try:
-            # Current parameter values
-            current_wob = current_data.get('WOB', 20)
-            current_rpm = current_data.get('RPM', 120)
-            current_flow = current_data.get('Flow_Rate', 600)
-            current_rop = current_data.get('ROP', 0)
-            
-            # Define parameter ranges to test
-            wob_range = np.arange(
-                max(self.constraints['min_wob'], current_wob - 2 * self.optimization_params['wob_increment']),
-                min(self.constraints['max_wob'], current_wob + 2 * self.optimization_params['wob_increment']),
-                self.optimization_params['wob_increment']
-            )
-            
-            rpm_range = np.arange(
-                max(self.constraints['min_rpm'], current_rpm - 2 * self.optimization_params['rpm_increment']),
-                min(self.constraints['max_rpm'], current_rpm + 2 * self.optimization_params['rpm_increment']),
-                self.optimization_params['rpm_increment']
-            )
-            
-            # Keep other parameters constant for simplicity
-            flow = current_flow
-            
-            # Get current values for other parameters
-            torque = current_data.get('Torque', 10)
-            spp = current_data.get('SPP', 3500)
-            ecd = current_data.get('ECD', 12.5)
-            mse = current_data.get('MSE', 30000)
-            
-            # Create test combinations
-            best_rop = 0
-            best_params = {'WOB': current_wob, 'RPM': current_rpm, 'Flow_Rate': flow}
-            
-            # Test different parameter combinations
-            for wob in wob_range:
-                for rpm in rpm_range:
-                    # Simple physics-based adjustments for non-independent parameters
-                    # In reality, these would be based on more complex drilling models
-                    est_torque = torque * (wob / current_wob) * (rpm / current_rpm)
-                    est_spp = spp * (flow / current_flow)**2
-                    
-                    # Skip if constraints are violated
-                    if est_torque > self.constraints['max_torque'] or est_spp > self.constraints['max_spp']:
-                        continue
-                    
-                    # Create feature vector for prediction
-                    features = np.array([[wob, rpm, flow, est_torque, est_spp, ecd, mse]])
-                    
-                    # Predict ROP
-                    predicted_rop = self.model.predict(features)[0]
-                    
-                    # Update best parameters if improvement found
-                    if predicted_rop > best_rop:
-                        best_rop = predicted_rop
-                        best_params = {'WOB': wob, 'RPM': rpm, 'Flow_Rate': flow}
-            
-            # Calculate expected improvement
-            expected_improvement = ((best_rop - current_rop) / current_rop * 100) if current_rop > 0 else 0
-            
-            # Return the optimized parameters
-            result = {
-                'recommended_parameters': best_params,
-                'expected_rop': best_rop,
-                'expected_rop_improvement': expected_improvement
-            }
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error optimizing ROP parameters: {str(e)}")
-            return self._get_default_recommendations(current_data)
-    
-    def _get_default_recommendations(self, current_data):
-        """Provide default recommendations based on physics principles when model is not trained"""
-        # Current parameter values
-        current_wob = current_data.get('WOB', 20)
-        current_rpm = current_data.get('RPM', 120)
-        current_flow = current_data.get('Flow_Rate', 600)
-        
-        # Simple heuristic adjustments
-        # If MSE is high, recommend increasing WOB and reducing RPM
-        mse = current_data.get('MSE', 30000)
-        if mse > 35000:
-            wob_rec = min(current_wob * 1.1, self.constraints['max_wob'])
-            rpm_rec = max(current_rpm * 0.9, self.constraints['min_rpm'])
-        else:
-            # Otherwise, recommend small increases to both
-            wob_rec = min(current_wob * 1.05, self.constraints['max_wob'])
-            rpm_rec = min(current_rpm * 1.05, self.constraints['max_rpm'])
-        
-        # Always ensure adequate flow rate for hole cleaning
-        flow_rec = current_flow
-        
-        return {
-            'recommended_parameters': {
-                'WOB': wob_rec,
-                'RPM': rpm_rec,
-                'Flow_Rate': flow_rec
-            },
-            'expected_rop': current_data.get('ROP', 0) * 1.1,  # Assume 10% improvement
-            'expected_rop_improvement': 10.0  # Default 10% improvement estimation
-        }
+        Args:
+            aggressiveness (float): Aggressiveness parameter (0-1) that affects
+                the agent's optimization approach. Higher values prioritize
+                ROP improvement over other considerations.
+        """
+        self.aggressiveness = aggressiveness
+        logger.info(f"Initialized ROP optimization agent with aggressiveness {aggressiveness}")
     
     def predict(self, drilling_data):
         """
-        Predict optimal drilling parameters for ROP optimization.
+        Analyze drilling data and recommend parameter changes for ROP optimization.
         
         Args:
-            drilling_data (dict): Processed drilling data
+            drilling_data (dict): Dictionary containing drilling parameters
             
         Returns:
-            dict: Optimization results with recommended parameters
+            dict: Optimization results including recommendations and expected improvements
         """
         try:
-            # Update training data with the new information
-            self._update_training_data(drilling_data)
+            if not drilling_data:
+                logger.warning("Empty drilling data provided to ROP optimization agent")
+                return {
+                    'optimized': False,
+                    'current_rop': 0.0,
+                    'expected_rop_improvement': 0.0,
+                    'recommended_parameters': {},
+                    'contributing_factors': [],
+                    'recommendations': []
+                }
             
-            # Get optimization recommendations
-            optimization_results = self._optimize_parameters(drilling_data)
-            
-            # Additional information for the drilling engineer
+            # Extract relevant parameters
             current_rop = drilling_data.get('ROP', 0)
-            current_wob = drilling_data.get('WOB', 0)
-            current_rpm = drilling_data.get('RPM', 0)
-            
-            # Determine limiting factors
-            limiting_factors = []
-            
-            # Check for MSE-related limitations
-            mse = drilling_data.get('MSE', 30000)
-            if mse > 35000:
-                limiting_factors.append("High mechanical specific energy indicating inefficient drilling")
-            
-            # Check for pressure limitations
-            spp = drilling_data.get('SPP', 0)
-            if spp > 0.8 * self.constraints['max_spp']:
-                limiting_factors.append("Approaching maximum allowable standpipe pressure")
-            
-            # Check for torque limitations
+            wob = drilling_data.get('WOB', 0)
+            rpm = drilling_data.get('RPM', 0)
+            flow_rate = drilling_data.get('Flow_Rate', 0)
             torque = drilling_data.get('Torque', 0)
-            if torque > 0.8 * self.constraints['max_torque']:
-                limiting_factors.append("Approaching maximum allowable torque")
+            mse = drilling_data.get('MSE', 0)  # Mechanical Specific Energy
+            ucs = drilling_data.get('UCS', 20)  # Unconfined Compressive Strength (estimated)
+            hole_cleaning_index = drilling_data.get('hole_cleaning_index', 0.8)
             
-            # Prepare recommendations for explanation
-            explanations = []
-            rec_params = optimization_results['recommended_parameters']
+            # Get formation data if available
+            formation_type = drilling_data.get('formation_type', 'Unknown')
+            porosity = drilling_data.get('porosity', 0.1)
             
-            if abs(rec_params['WOB'] - current_wob) > 1:
-                direction = "increase" if rec_params['WOB'] > current_wob else "decrease"
-                explanations.append(f"Recommend {direction} in Weight on Bit for better ROP performance")
+            # Apply physics-informed optimization model for ROP
             
-            if abs(rec_params['RPM'] - current_rpm) > 5:
-                direction = "increase" if rec_params['RPM'] > current_rpm else "decrease"
-                explanations.append(f"Recommend {direction} in RPM to optimize drilling efficiency")
+            # 1. Analyze current drilling efficiency
             
-            # Prepare result dictionary
-            result = {
-                'probability': 0.9,  # Confidence in recommendation
-                'recommended_parameters': optimization_results['recommended_parameters'],
-                'expected_rop': optimization_results['expected_rop'],
-                'expected_rop_improvement': optimization_results['expected_rop_improvement'],
-                'limiting_factors': limiting_factors,
-                'explanations': explanations,
-                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Calculate theoretical optimal MSE based on formation strength
+            optimal_mse = ucs * 0.35  # Rule of thumb: MSE should be ~35% of UCS for efficient drilling
+            
+            # Drilling efficiency ratio (lower MSE is better)
+            efficiency_ratio = 1.0
+            if mse > 0 and optimal_mse > 0:
+                efficiency_ratio = optimal_mse / mse
+                efficiency_ratio = min(1.0, max(0.1, efficiency_ratio))
+            
+            # 2. Determine parameter adjustments needed
+            
+            # WOB optimization
+            optimal_wob = wob
+            wob_adjustment_needed = False
+            
+            if efficiency_ratio < 0.7:  # Low efficiency
+                # Check if WOB is the limiting factor
+                if torque / (wob + 0.1) < 0.3:  # Low torque per unit WOB
+                    # Increase WOB if MSE is high
+                    optimal_wob = wob * 1.2
+                    wob_adjustment_needed = True
+                elif torque / (wob + 0.1) > 0.7:  # High torque per unit WOB
+                    # Decrease WOB if causing excessive torque
+                    optimal_wob = wob * 0.85
+                    wob_adjustment_needed = True
+            
+            # RPM optimization
+            optimal_rpm = rpm
+            rpm_adjustment_needed = False
+            
+            if efficiency_ratio < 0.7:
+                if torque > 0.8 * drilling_data.get('max_torque', 100):
+                    # Decrease RPM if torque is approaching limits
+                    optimal_rpm = rpm * 0.85
+                    rpm_adjustment_needed = True
+                elif torque < 0.4 * drilling_data.get('max_torque', 100):
+                    # Increase RPM if torque is low
+                    optimal_rpm = rpm * 1.15
+                    rpm_adjustment_needed = True
+            
+            # Flow rate optimization
+            optimal_flow_rate = flow_rate
+            flow_adjustment_needed = False
+            
+            if hole_cleaning_index < 0.7:
+                # Increase flow rate to improve hole cleaning
+                optimal_flow_rate = flow_rate * 1.15
+                flow_adjustment_needed = True
+            
+            # 3. Estimate ROP improvement potential
+            
+            # Base improvement from WOB adjustment
+            wob_improvement = 0
+            if wob_adjustment_needed:
+                if optimal_wob > wob:
+                    wob_improvement = (optimal_wob / wob - 1) * 0.7  # 70% of theoretical improvement
+                else:
+                    wob_improvement = -0.05  # Small negative impact
+            
+            # Improvement from RPM adjustment
+            rpm_improvement = 0
+            if rpm_adjustment_needed:
+                if optimal_rpm > rpm:
+                    rpm_improvement = (optimal_rpm / rpm - 1) * 0.5  # 50% of theoretical improvement
+                else:
+                    rpm_improvement = -0.03  # Small negative impact
+            
+            # Improvement from flow rate adjustment (indirect through better hole cleaning)
+            flow_improvement = 0
+            if flow_adjustment_needed and optimal_flow_rate > flow_rate:
+                flow_improvement = 0.05  # Modest improvement from better hole cleaning
+            
+            # Combined improvement (multiplicative factors)
+            total_improvement_factor = (1 + wob_improvement) * (1 + rpm_improvement) * (1 + flow_improvement) - 1
+            
+            # Apply aggressiveness factor to adjust recommendations
+            aggressiveness_factor = 0.5 + 0.5 * self.aggressiveness
+            
+            # Scale optimizations based on aggressiveness
+            if wob_adjustment_needed:
+                optimal_wob = wob + (optimal_wob - wob) * aggressiveness_factor
+            
+            if rpm_adjustment_needed:
+                optimal_rpm = rpm + (optimal_rpm - rpm) * aggressiveness_factor
+            
+            if flow_adjustment_needed:
+                optimal_flow_rate = flow_rate + (optimal_flow_rate - flow_rate) * aggressiveness_factor
+            
+            # Final expected ROP improvement
+            expected_rop_improvement = total_improvement_factor * current_rop
+            
+            # 4. Prepare recommended parameters
+            recommended_parameters = {}
+            
+            if wob_adjustment_needed:
+                recommended_parameters['WOB'] = round(optimal_wob, 1)
+            
+            if rpm_adjustment_needed:
+                recommended_parameters['RPM'] = round(optimal_rpm, 0)
+            
+            if flow_adjustment_needed:
+                recommended_parameters['Flow_Rate'] = round(optimal_flow_rate, 0)
+            
+            # 5. Determine contributing factors and recommendations
+            contributing_factors = []
+            recommendations = []
+            
+            if efficiency_ratio < 0.7:
+                contributing_factors.append({
+                    'factor': 'Low Drilling Efficiency',
+                    'value': f"{efficiency_ratio:.2f} ratio"
+                })
+                
+                if mse > optimal_mse * 1.5:
+                    recommendations.append("Adjust parameters to reduce MSE and improve drilling efficiency")
+            
+            if wob_adjustment_needed:
+                direction = "Increase" if optimal_wob > wob else "Decrease"
+                contributing_factors.append({
+                    'factor': 'WOB Adjustment',
+                    'value': f"{direction} to {optimal_wob:.1f} klbs"
+                })
+                
+                if direction == "Increase":
+                    recommendations.append(f"Gradually increase WOB to {optimal_wob:.1f} klbs")
+                else:
+                    recommendations.append(f"Gradually decrease WOB to {optimal_wob:.1f} klbs")
+            
+            if rpm_adjustment_needed:
+                direction = "Increase" if optimal_rpm > rpm else "Decrease"
+                contributing_factors.append({
+                    'factor': 'RPM Adjustment',
+                    'value': f"{direction} to {optimal_rpm:.0f} rpm"
+                })
+                
+                if direction == "Increase":
+                    recommendations.append(f"Gradually increase RPM to {optimal_rpm:.0f}")
+                else:
+                    recommendations.append(f"Gradually decrease RPM to {optimal_rpm:.0f}")
+            
+            if flow_adjustment_needed:
+                contributing_factors.append({
+                    'factor': 'Flow Rate Adjustment',
+                    'value': f"Increase to {optimal_flow_rate:.0f} gpm"
+                })
+                recommendations.append(f"Increase flow rate to {optimal_flow_rate:.0f} gpm for better hole cleaning")
+            
+            # Add general recommendations based on formation type
+            if formation_type in ["Sandstone", "Sand"]:
+                recommendations.append("For sandstone formations, maintain higher RPM and moderate WOB")
+            elif formation_type in ["Shale", "Clay"]:
+                recommendations.append("For shale formations, maintain moderate RPM and higher WOB")
+            elif formation_type in ["Limestone", "Carbonate"]:
+                recommendations.append("For limestone formations, use balanced WOB and RPM")
+            
+            # Prepare prediction result
+            prediction = {
+                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'optimized': len(recommended_parameters) > 0,
+                'current_rop': current_rop,
+                'expected_rop_improvement': round(expected_rop_improvement, 1),
+                'expected_rop': round(current_rop + expected_rop_improvement, 1),
+                'recommended_parameters': recommended_parameters,
+                'contributing_factors': contributing_factors,
+                'recommendations': recommendations
             }
             
-            logger.info(f"ROP optimization recommendation: WOB={rec_params['WOB']:.1f}, RPM={rec_params['RPM']:.0f}")
-            return result
-        
+            logger.debug(f"ROP optimization prediction: {expected_rop_improvement:.2f} ft/hr potential improvement")
+            return prediction
+            
         except Exception as e:
             logger.error(f"Error in ROP optimization: {str(e)}")
             return {
-                'probability': 0.0,
-                'recommended_parameters': {
-                    'WOB': drilling_data.get('WOB', 0),
-                    'RPM': drilling_data.get('RPM', 0),
-                    'Flow_Rate': drilling_data.get('Flow_Rate', 0)
-                },
-                'expected_rop_improvement': 0,
-                'limiting_factors': ["Error in optimization model"],
-                'explanations': ["Check system logs for errors"],
-                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                'optimized': False,
+                'current_rop': 0.0,
+                'expected_rop_improvement': 0.0,
+                'recommended_parameters': {},
+                'contributing_factors': [],
+                'recommendations': ["Error in optimization model"]
             }
-
-# Create a singleton instance
-agent = ROPOptimizationAgent()
-
-def predict(drilling_data):
-    """Wrapper function to call the agent's predict method"""
-    return agent.predict(drilling_data)

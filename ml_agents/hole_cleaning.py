@@ -1,5 +1,11 @@
-import numpy as np
+"""
+Hole cleaning prediction agent.
+
+This module implements a machine learning agent for predicting hole cleaning issues.
+"""
+
 import logging
+import numpy as np
 from datetime import datetime
 
 # Set up logging
@@ -8,192 +14,189 @@ logger = logging.getLogger(__name__)
 
 class HoleCleaningAgent:
     """
-    Physics-informed ML agent for detecting and predicting hole cleaning issues.
+    Agent for predicting hole cleaning issues during drilling operations.
     
-    Hole cleaning issues occur when cuttings are not efficiently removed from the wellbore,
-    leading to increased ECD, pack-offs, and potential stuck pipe.
+    This agent analyzes drilling parameters to predict the likelihood of
+    inadequate hole cleaning, which can lead to packoffs, stuck pipe,
+    and other drilling problems.
     """
     
-    def __init__(self):
-        # Initialize model parameters based on physics and fluid dynamics
-        self.model_parameters = {
-            'rop_flow_ratio_threshold': 0.15,  # ROP to flow rate ratio threshold
-            'ecd_increase_threshold': 0.3,  # ppg increase indication
-            'pressure_fluctuation_threshold': 150,  # psi
-            'torque_increase_threshold': 20,  # percent increase
-            'annular_velocity_min': 120,  # ft/min minimum for effective cleaning
-            'rop_flow_weight': 0.25,
-            'ecd_weight': 0.25,
-            'pressure_weight': 0.2,
-            'torque_weight': 0.15,
-            'historical_weight': 0.15
-        }
+    def __init__(self, sensitivity=0.75):
+        """
+        Initialize the hole cleaning agent.
+        
+        Args:
+            sensitivity (float): Sensitivity parameter (0-1) that affects
+                the agent's prediction threshold. Higher values make the
+                agent more sensitive to potential issues.
+        """
+        self.sensitivity = sensitivity
+        logger.info(f"Initialized hole cleaning agent with sensitivity {sensitivity}")
     
     def predict(self, drilling_data):
         """
-        Predict the likelihood of hole cleaning issues.
+        Predict the likelihood of hole cleaning issues based on drilling data.
         
         Args:
-            drilling_data (dict): Processed drilling data
+            drilling_data (dict): Dictionary containing drilling parameters
             
         Returns:
-            dict: Prediction results with probability and contributing factors
+            dict: Prediction results including probability and contributing factors
         """
         try:
-            # Extract relevant drilling parameters
+            if not drilling_data:
+                logger.warning("Empty drilling data provided to hole cleaning agent")
+                return {
+                    'probability': 0.0,
+                    'contributing_factors': [],
+                    'recommendations': []
+                }
+            
+            # Extract relevant parameters
+            hole_cleaning_index = drilling_data.get('hole_cleaning_index', 0)
             rop = drilling_data.get('ROP', 0)
+            rpm = drilling_data.get('RPM', 0)
             flow_rate = drilling_data.get('Flow_Rate', 0)
-            ecd = drilling_data.get('ECD', 12.5)
-            spp = drilling_data.get('SPP', 0)
+            ecd = drilling_data.get('ECD', 0)
             torque = drilling_data.get('Torque', 0)
-            hole_cleaning_index = drilling_data.get('hole_cleaning_index', 1.0)
+            depth = drilling_data.get('depth', 0)
             
-            # Feature 1: ROP to flow rate ratio
-            # Higher ROP relative to flow rate increases risk of poor hole cleaning
-            rop_flow_ratio = (rop / 100) / (flow_rate / 600) if flow_rate > 0 else 1.0
-            rop_flow_feature = min(1.0, rop_flow_ratio / self.model_parameters['rop_flow_ratio_threshold'])
+            # Get trend data if available
+            rop_change = drilling_data.get('ROP_change', 0)
+            flow_rate_change = drilling_data.get('Flow_Rate_change', 0)
             
-            # Feature 2: ECD trends
-            # Increasing ECD can indicate cuttings accumulation
-            ecd_feature = 0.0
+            # Apply physics-informed prediction model for hole cleaning issues
             
-            if 'time_series' in drilling_data and 'ECD' in drilling_data['time_series']:
-                ecd_series = drilling_data['time_series']['ECD']
-                if len(ecd_series) > 10:
-                    early_avg = np.mean(ecd_series[:5])
-                    late_avg = np.mean(ecd_series[-5:])
-                    
-                    ecd_increase = late_avg - early_avg
-                    ecd_feature = min(1.0, ecd_increase / self.model_parameters['ecd_increase_threshold'])
-                    ecd_feature = max(0.0, ecd_feature)  # Ensure non-negative
+            # 1. Use hole cleaning index if available (direct measure of cleaning efficiency)
+            if hole_cleaning_index > 0:
+                # Invert since higher index means better cleaning (lower risk)
+                base_probability = min(1.0, max(0.0, 1.0 - hole_cleaning_index))
+            else:
+                # Default moderate value if index not available
+                base_probability = 0.5
             
-            # Feature 3: Pressure fluctuations
-            # High standpipe pressure fluctuations can indicate cuttings accumulation
-            pressure_feature = 0.0
+            # 2. Analyze additional factors that contribute to hole cleaning issues
             
-            if 'time_series' in drilling_data and 'SPP' in drilling_data['time_series']:
-                spp_series = drilling_data['time_series']['SPP']
-                if len(spp_series) > 10:
-                    spp_std = np.std(spp_series[-10:])
-                    pressure_feature = min(1.0, spp_std / self.model_parameters['pressure_fluctuation_threshold'])
+            # ROP factor - higher ROP produces more cuttings
+            rop_factor = 0
+            if rop > 0:
+                # Normalize ROP (assuming 100 ft/hr as high risk threshold)
+                rop_factor = min(1.0, max(0.0, rop / 100))
             
-            # Feature 4: Torque trends
-            # Increasing torque can indicate cuttings beds
-            torque_feature = 0.0
+            # RPM factor - lower RPM reduces hole cleaning efficiency
+            rpm_factor = 0
+            if rpm > 0:
+                # Inverse relationship - lower RPM increases risk
+                rpm_factor = min(1.0, max(0.0, 1.0 - (rpm / 150)))
             
-            if 'time_series' in drilling_data and 'Torque' in drilling_data['time_series']:
-                torque_series = drilling_data['time_series']['Torque']
-                if len(torque_series) > 10:
-                    early_avg = np.mean(torque_series[:5])
-                    late_avg = np.mean(torque_series[-5:])
-                    
-                    if early_avg > 0:
-                        torque_increase_pct = 100 * (late_avg - early_avg) / early_avg
-                        torque_feature = min(1.0, torque_increase_pct / self.model_parameters['torque_increase_threshold'])
-                        torque_feature = max(0.0, torque_feature)  # Ensure non-negative
+            # Flow rate factor - lower flow rate reduces hole cleaning
+            flow_rate_factor = 0
+            if flow_rate > 0:
+                # Inverse relationship - lower flow rates increase risk
+                flow_rate_factor = min(1.0, max(0.0, 1.0 - (flow_rate / 800)))
             
-            # Feature 5: Historical hole cleaning performance
-            # Use the calculated hole cleaning index
-            historical_feature = min(1.0, max(0.0, (hole_cleaning_index - 1.0) * 2))
+            # ECD factor - extreme ECDs (too high or too low) can affect cleaning
+            ecd_factor = 0
+            if ecd > 0:
+                # Optimum ECD around 11-12 ppg (simplified model)
+                ecd_deviation = abs(ecd - 11.5)
+                ecd_factor = min(1.0, max(0.0, ecd_deviation / 3))
             
-            # Combine features with weighted average
-            cleaning_issue_probability = (
-                self.model_parameters['rop_flow_weight'] * rop_flow_feature +
-                self.model_parameters['ecd_weight'] * ecd_feature +
-                self.model_parameters['pressure_weight'] * pressure_feature +
-                self.model_parameters['torque_weight'] * torque_feature +
-                self.model_parameters['historical_weight'] * historical_feature
+            # Hole angle factor - assumed horizontal if depth is high (simplified model)
+            # In reality, this would use inclination data
+            hole_angle_factor = 0
+            if depth > 8000:  # Assume horizontal section after 8000 ft
+                hole_angle_factor = 0.8  # Higher risk in horizontal sections
+            else:
+                hole_angle_factor = min(0.6, max(0.1, depth / 10000))  # Gradual increase with depth
+            
+            # 3. Combine factors with appropriate weights
+            cleaning_probability = (
+                0.3 * base_probability +
+                0.2 * rop_factor +
+                0.1 * rpm_factor +
+                0.2 * flow_rate_factor +
+                0.1 * ecd_factor +
+                0.1 * hole_angle_factor
             )
             
-            # Clip probability to [0, 1] range
-            cleaning_issue_probability = min(1.0, max(0.0, cleaning_issue_probability))
+            # Apply sensitivity adjustment
+            cleaning_probability = min(1.0, cleaning_probability * (1.0 + (self.sensitivity - 0.5)))
             
-            # Determine contributing factors for explanation
+            # 4. Adjust based on trends (increasing ROP or decreasing flow rate increases risk)
+            if rop_change > 5:  # ROP increasing rapidly
+                cleaning_probability = min(1.0, cleaning_probability + 0.1)
+            
+            if flow_rate_change < -20:  # Flow rate decreasing rapidly
+                cleaning_probability = min(1.0, cleaning_probability + 0.1)
+            
+            # 5. Determine contributing factors
             contributing_factors = []
+            recommendations = []
             
-            if rop_flow_feature > 0.6:
-                contributing_factors.append("High ROP relative to flow rate")
+            # Add contributing factors in order of significance
+            if hole_cleaning_index < 0.6 and hole_cleaning_index > 0:
+                contributing_factors.append({
+                    'factor': 'Low Hole Cleaning Index',
+                    'value': f"{hole_cleaning_index:.2f}"
+                })
+                recommendations.append("Increase flow rate and pipe rotation to improve hole cleaning")
             
-            if ecd_feature > 0.6:
-                contributing_factors.append("Increasing ECD trend")
+            if rop_factor > 0.7:
+                contributing_factors.append({
+                    'factor': 'High ROP',
+                    'value': f"{rop:.1f} ft/hr"
+                })
+                recommendations.append("Reduce ROP to prevent excess cuttings generation")
             
-            if pressure_feature > 0.6:
-                contributing_factors.append("Significant pressure fluctuations")
+            if flow_rate_factor > 0.6:
+                contributing_factors.append({
+                    'factor': 'Low Flow Rate',
+                    'value': f"{flow_rate:.0f} gpm"
+                })
+                recommendations.append("Increase flow rate to improve cuttings removal")
             
-            if torque_feature > 0.6:
-                contributing_factors.append("Increasing torque trend")
+            if rpm_factor > 0.6:
+                contributing_factors.append({
+                    'factor': 'Low RPM',
+                    'value': f"{rpm:.0f} rpm"
+                })
+                recommendations.append("Increase rotary speed to improve hole cleaning")
             
-            if historical_feature > 0.6:
-                contributing_factors.append("Poor hole cleaning efficiency")
+            if ecd_factor > 0.6:
+                contributing_factors.append({
+                    'factor': 'Non-optimal ECD',
+                    'value': f"{ecd:.2f} ppg"
+                })
+                recommendations.append("Adjust mud properties to optimize ECD")
             
-            # Generate recommendations based on probability
-            recommendations = self._generate_recommendations(cleaning_issue_probability, contributing_factors, drilling_data)
+            if hole_angle_factor > 0.7:
+                contributing_factors.append({
+                    'factor': 'High Hole Angle/Depth',
+                    'value': f"{depth:.0f} ft"
+                })
+                recommendations.append("Increase flowrate and RPM in high-angle sections")
             
-            # Prepare result dictionary
-            result = {
-                'probability': cleaning_issue_probability,
+            # Add general recommendations if high probability
+            if cleaning_probability > 0.7 and not recommendations:
+                recommendations.append("Perform wiper trips to clean the hole")
+                recommendations.append("Consider optimizing mud properties for better cuttings transport")
+            
+            # Prepare prediction result
+            prediction = {
+                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'probability': cleaning_probability,
                 'contributing_factors': contributing_factors,
-                'recommendations': recommendations,
-                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                'recommendations': recommendations
             }
             
-            logger.info(f"Hole cleaning issue prediction: {cleaning_issue_probability:.2f}")
-            return result
-        
+            logger.debug(f"Hole cleaning issue prediction: {cleaning_probability:.2f}")
+            return prediction
+            
         except Exception as e:
-            logger.error(f"Error predicting hole cleaning issues: {str(e)}")
+            logger.error(f"Error in hole cleaning prediction: {str(e)}")
             return {
                 'probability': 0.0,
-                'contributing_factors': ["Error in prediction model"],
-                'recommendations': ["Check system logs for errors"],
-                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                'contributing_factors': [],
+                'recommendations': ["Error in prediction model"]
             }
-    
-    def _generate_recommendations(self, probability, factors, data):
-        """Generate drilling recommendations based on prediction results"""
-        recommendations = []
-        
-        if probability < 0.3:
-            # Low risk - normal operations
-            recommendations.append("Continue normal operations")
-            recommendations.append("Monitor ECD and cuttings returns")
-        
-        elif probability < 0.7:
-            # Medium risk - preventive measures
-            recommendations.append("Perform pumps-off flow check")
-            recommendations.append("Consider wiper trips to clean the wellbore")
-            
-            if "High ROP relative to flow rate" in factors:
-                recommendations.append("Reduce ROP or increase flow rate")
-            
-            if "Increasing ECD trend" in factors:
-                recommendations.append("Monitor for pressure spikes during connections")
-            
-            if "Poor hole cleaning efficiency" in factors:
-                recommendations.append("Optimize drilling fluid properties")
-                recommendations.append("Increase annular velocity if possible")
-        
-        else:
-            # High risk - significant action required
-            recommendations.append("Stop drilling and circulate bottoms up")
-            recommendations.append("Perform wiper trips with high flow rates")
-            recommendations.append("Monitor ECD closely")
-            
-            if "Significant pressure fluctuations" in factors:
-                recommendations.append("Check for packoff indications")
-            
-            if "Increasing torque trend" in factors:
-                recommendations.append("Work pipe with high flow rates to clean wellbore")
-                recommendations.append("Consider modifying mud rheology to improve cutting transport")
-            
-            if "High ROP relative to flow rate" in factors:
-                recommendations.append("Significantly reduce ROP until hole cleaning improves")
-        
-        return recommendations
-
-# Create a singleton instance
-agent = HoleCleaningAgent()
-
-def predict(drilling_data):
-    """Wrapper function to call the agent's predict method"""
-    return agent.predict(drilling_data)

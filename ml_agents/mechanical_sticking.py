@@ -1,5 +1,11 @@
-import numpy as np
+"""
+Mechanical sticking prediction agent.
+
+This module implements a machine learning agent for predicting mechanical sticking.
+"""
+
 import logging
+import numpy as np
 from datetime import datetime
 
 # Set up logging
@@ -8,172 +14,167 @@ logger = logging.getLogger(__name__)
 
 class MechanicalStickingAgent:
     """
-    Physics-informed ML agent for detecting and predicting mechanical sticking.
+    Agent for predicting mechanical sticking during drilling operations.
     
-    Mechanical sticking occurs when the drillstring gets physically stuck due to
-    wellbore geometry issues, collapsed formation, or mechanical restrictions.
+    This agent analyzes drilling parameters to predict the likelihood of
+    mechanical sticking, which can occur due to various factors such as
+    undergauge hole, keyseating, ledges, or wellbore instability.
     """
     
-    def __init__(self):
-        # Initialize model parameters
-        # In a full implementation, these would be trained parameters
-        # For this demo, we'll use physics-based heuristics and thresholds
-        self.model_parameters = {
-            'torque_weight_ratio_threshold': 0.45,  # Torque to WOB ratio threshold
-            'drag_factor_threshold': 1.3,  # Excessive drag threshold
-            'rpm_fluctuation_threshold': 2.5,  # RPM standard deviation threshold
-            'wob_fluctuation_threshold': 1.2,  # WOB standard deviation threshold
-            'torque_spike_threshold': 1.5,  # Torque spike ratio threshold
-            'torque_baseline_weight': 0.25,
-            'drag_weight': 0.25,
-            'fluctuation_weight': 0.2,
-            'historical_weight': 0.3
-        }
+    def __init__(self, sensitivity=0.8):
+        """
+        Initialize the mechanical sticking agent.
+        
+        Args:
+            sensitivity (float): Sensitivity parameter (0-1) that affects
+                the agent's prediction threshold. Higher values make the
+                agent more sensitive to potential sticking.
+        """
+        self.sensitivity = sensitivity
+        logger.info(f"Initialized mechanical sticking agent with sensitivity {sensitivity}")
     
     def predict(self, drilling_data):
         """
-        Predict the likelihood of mechanical sticking.
+        Predict the likelihood of mechanical sticking based on drilling data.
         
         Args:
-            drilling_data (dict): Processed drilling data
+            drilling_data (dict): Dictionary containing drilling parameters
             
         Returns:
-            dict: Prediction results with probability and contributing factors
+            dict: Prediction results including probability and contributing factors
         """
         try:
-            # Extract relevant drilling parameters
+            if not drilling_data:
+                logger.warning("Empty drilling data provided to mechanical sticking agent")
+                return {
+                    'probability': 0.0,
+                    'contributing_factors': [],
+                    'recommendations': []
+                }
+            
+            # Extract relevant parameters
             wob = drilling_data.get('WOB', 0)
-            torque = drilling_data.get('Torque', 0)
             rpm = drilling_data.get('RPM', 0)
-            drag_factor = drilling_data.get('Drag_Factor', 1.0)
+            torque = drilling_data.get('Torque', 0)
+            flow_rate = drilling_data.get('Flow_Rate', 0)
+            drag_factor = drilling_data.get('drag_factor', 0)
             
-            # Feature 1: Torque to Weight on Bit ratio
-            # Higher values indicate higher friction and potential sticking points
-            torque_wob_ratio = torque / max(1, wob)  # Avoid division by zero
-            torque_feature = min(1.0, torque_wob_ratio / self.model_parameters['torque_weight_ratio_threshold'])
+            # Check for rate of change parameters
+            torque_change = drilling_data.get('Torque_change', 0)
+            rpm_change = drilling_data.get('RPM_change', 0)
             
-            # Feature 2: Drag factor
-            # Higher values indicate increased friction in the wellbore
-            drag_feature = min(1.0, drag_factor / self.model_parameters['drag_factor_threshold'])
+            # Get statistical metrics if available
+            torque_avg = drilling_data.get('torque_avg', torque)
+            torque_std = drilling_data.get('torque_std', 0)
+            rpm_avg = drilling_data.get('rpm_avg', rpm)
+            rpm_std = drilling_data.get('rpm_std', 0)
             
-            # Feature 3: RPM and WOB fluctuations
-            # High fluctuations can indicate impending sticking
-            rpm_std = drilling_data.get('RPM_std', 0)
-            wob_std = drilling_data.get('WOB_std', 0)
+            # Apply physics-informed prediction model for mechanical sticking
             
-            rpm_fluctuation = min(1.0, rpm_std / self.model_parameters['rpm_fluctuation_threshold'])
-            wob_fluctuation = min(1.0, wob_std / self.model_parameters['wob_fluctuation_threshold'])
-            fluctuation_feature = (rpm_fluctuation + wob_fluctuation) / 2
+            # 1. Calculate base probability from drag factor
+            # Higher drag factor indicates greater friction and potential for sticking
+            base_probability = min(1.0, max(0.0, drag_factor * 0.8))
             
-            # Feature 4: Historical trends
-            # Look for worsening conditions over time
-            historical_feature = 0.0
+            # 2. Analyze torque and RPM patterns for mechanical sticking signatures
             
-            if 'time_series' in drilling_data:
-                time_series = drilling_data['time_series']
-                if 'Torque' in time_series and 'WOB' in time_series and len(time_series['Torque']) > 10:
-                    # Calculate trend in torque/WOB ratio
-                    recent_torque = np.array(time_series['Torque'][-10:])
-                    recent_wob = np.array(time_series['WOB'][-10:])
-                    recent_wob = np.where(recent_wob < 0.1, 0.1, recent_wob)  # Avoid division by zero
-                    
-                    recent_ratio = recent_torque / recent_wob
-                    
-                    # Simple trend detection
-                    if len(recent_ratio) > 5:
-                        early_avg = np.mean(recent_ratio[:5])
-                        late_avg = np.mean(recent_ratio[-5:])
-                        
-                        # If increasing trend, higher likelihood of sticking
-                        trend_factor = (late_avg - early_avg) / early_avg if early_avg > 0 else 0
-                        historical_feature = min(1.0, max(0, trend_factor * 5))
+            # Normalized torque (how much current torque deviates from average)
+            if torque_avg > 0 and torque_std > 0:
+                torque_factor = (torque - torque_avg) / (torque_std + 1)  # +1 to avoid division by zero
+            else:
+                torque_factor = 0
+                
+            # High torque is a risk factor
+            torque_risk = min(1.0, max(0.0, 0.3 + 0.7 * (torque_factor if torque_factor > 0 else 0)))
             
-            # Combine features with weighted average
+            # Torque instability (rapid changes) indicates potential sticking
+            torque_instability = min(1.0, abs(torque_change) / (torque_avg * 0.2 + 0.1))
+            
+            # RPM instability
+            if rpm_avg > 0 and rpm_std > 0:
+                rpm_instability = min(1.0, abs(rpm_change) / (rpm_avg * 0.2 + 0.1))
+            else:
+                rpm_instability = 0
+            
+            # 3. Combine factors with appropriate weights
             sticking_probability = (
-                self.model_parameters['torque_baseline_weight'] * torque_feature +
-                self.model_parameters['drag_weight'] * drag_feature +
-                self.model_parameters['fluctuation_weight'] * fluctuation_feature +
-                self.model_parameters['historical_weight'] * historical_feature
+                0.35 * base_probability +
+                0.25 * torque_risk +
+                0.25 * torque_instability +
+                0.15 * rpm_instability
             )
             
-            # Clip probability to [0, 1] range
-            sticking_probability = min(1.0, max(0.0, sticking_probability))
+            # Apply sensitivity adjustment
+            sticking_probability = min(1.0, sticking_probability * (1.0 + (self.sensitivity - 0.5)))
             
-            # Determine contributing factors for explanation
+            # 4. Determine contributing factors
             contributing_factors = []
+            recommendations = []
             
-            if torque_feature > 0.6:
-                contributing_factors.append("High torque to WOB ratio")
+            # Add contributing factors in order of significance
+            if drag_factor > 0.6:
+                contributing_factors.append({
+                    'factor': 'High Drag Factor',
+                    'value': f"{drag_factor:.2f}"
+                })
+                recommendations.append("Work pipe to reduce drag and consider lubricant additives to mud")
             
-            if drag_feature > 0.6:
-                contributing_factors.append("Elevated drag factor")
+            if torque_risk > 0.5:
+                contributing_factors.append({
+                    'factor': 'Elevated Torque',
+                    'value': f"{torque:.1f} kft-lbs"
+                })
+                recommendations.append("Reduce weight on bit (WOB) to decrease torque")
             
-            if fluctuation_feature > 0.6:
-                contributing_factors.append("Significant RPM and WOB fluctuations")
+            if torque_instability > 0.6:
+                contributing_factors.append({
+                    'factor': 'Torque Instability',
+                    'value': f"{torque_change:.2f} kft-lbs/min"
+                })
+                recommendations.append("Stabilize drilling parameters and check for formation changes")
             
-            if historical_feature > 0.6:
-                contributing_factors.append("Worsening trend in torque/WOB ratio")
+            if rpm_instability > 0.6:
+                contributing_factors.append({
+                    'factor': 'RPM Instability',
+                    'value': f"{rpm_change:.1f} RPM/min"
+                })
+                recommendations.append("Stabilize rotary speed and check for possible vibrations")
             
-            # Generate recommendations based on sticking probability
-            recommendations = self._generate_recommendations(sticking_probability, contributing_factors, drilling_data)
+            # If flow rate is low, it could contribute to poor hole cleaning
+            if flow_rate < 400 and sticking_probability > 0.4:
+                contributing_factors.append({
+                    'factor': 'Low Flow Rate',
+                    'value': f"{flow_rate:.0f} gpm"
+                })
+                recommendations.append("Increase flow rate to improve hole cleaning")
             
-            # Prepare result dictionary
-            result = {
+            # If WOB is high, it could contribute to sticking risk
+            if wob > 30 and sticking_probability > 0.4:
+                contributing_factors.append({
+                    'factor': 'High WOB',
+                    'value': f"{wob:.1f} klbs"
+                })
+                recommendations.append("Reduce weight on bit (WOB) to decrease mechanical sticking risk")
+            
+            # Add general recommendations if high probability
+            if sticking_probability > 0.7 and not recommendations:
+                recommendations.append("Perform slack-off and pick-up tests to check for potential sticking points")
+                recommendations.append("Consider working the pipe and reaming to clean the hole")
+            
+            # Prepare prediction result
+            prediction = {
+                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 'probability': sticking_probability,
                 'contributing_factors': contributing_factors,
-                'recommendations': recommendations,
-                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                'recommendations': recommendations
             }
             
-            logger.info(f"Mechanical sticking prediction: {sticking_probability:.2f}")
-            return result
-        
+            logger.debug(f"Mechanical sticking prediction: {sticking_probability:.2f}")
+            return prediction
+            
         except Exception as e:
-            logger.error(f"Error predicting mechanical sticking: {str(e)}")
+            logger.error(f"Error in mechanical sticking prediction: {str(e)}")
             return {
                 'probability': 0.0,
-                'contributing_factors': ["Error in prediction model"],
-                'recommendations': ["Check system logs for errors"],
-                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                'contributing_factors': [],
+                'recommendations': ["Error in prediction model"]
             }
-    
-    def _generate_recommendations(self, probability, factors, data):
-        """Generate drilling recommendations based on prediction results"""
-        recommendations = []
-        
-        if probability < 0.3:
-            # Low risk - normal operations
-            recommendations.append("Continue normal operations")
-            recommendations.append("Monitor torque and drag trends")
-        
-        elif probability < 0.7:
-            # Medium risk - preventive measures
-            recommendations.append("Reduce WOB and RPM temporarily")
-            recommendations.append("Perform controlled back-reaming to clean the wellbore")
-            
-            if "High torque to WOB ratio" in factors:
-                recommendations.append("Consider adding lubricant to drilling fluid")
-            
-            if "Elevated drag factor" in factors:
-                recommendations.append("Perform wiper trips to ensure wellbore is clean")
-        
-        else:
-            # High risk - significant action required
-            recommendations.append("Stop drilling and work pipe up and down")
-            recommendations.append("Reduce drilling parameters to minimum")
-            recommendations.append("Circulate to clean wellbore")
-            
-            if "Worsening trend in torque/WOB ratio" in factors:
-                recommendations.append("Prepare contingency plan for stuck pipe")
-            
-            if "Significant RPM and WOB fluctuations" in factors:
-                recommendations.append("Check for tight spots through controlled movement")
-        
-        return recommendations
-
-# Create a singleton instance
-agent = MechanicalStickingAgent()
-
-def predict(drilling_data):
-    """Wrapper function to call the agent's predict method"""
-    return agent.predict(drilling_data)

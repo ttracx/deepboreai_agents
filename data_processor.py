@@ -1,7 +1,12 @@
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
+"""
+Data processor for the drilling prediction application.
+
+This module provides functions to process raw drilling data from WITSML sources
+and prepare it for use in ML models and visualization.
+"""
+
 import logging
+from datetime import datetime
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -17,115 +22,119 @@ def process_data(raw_data):
     Returns:
         dict: Processed data ready for ML model input
     """
-    if raw_data is None:
-        logger.warning("No raw data provided for processing")
-        return None
-    
     try:
-        # Create a copy of the data to avoid modifying the original
+        # If raw_data is None, return empty data
+        if not raw_data:
+            logger.error("No data to process")
+            return {}
+        
+        # Log incoming data for debugging
+        logger.debug(f"Processing data with {len(raw_data)} parameters")
+        
+        # Make a copy to avoid modifying the original
         processed_data = raw_data.copy()
         
-        # Calculate derived features
-        # Mechanical Specific Energy (MSE) = (WOB*4*π*RPM*Torque)/(ROP*bit diameter^2)
-        # Simplified formula if MSE not provided:
-        if 'MSE' not in processed_data:
-            # Assuming 8.5" bit diameter as a default
-            bit_diameter = 8.5
-            wob = processed_data.get('WOB', 0)
-            rpm = processed_data.get('RPM', 0)
-            torque = processed_data.get('Torque', 0)
-            rop = max(0.1, processed_data.get('ROP', 0.1))  # Avoid division by zero
-            
-            processed_data['MSE'] = (4 * np.pi * wob * rpm * torque) / (rop * bit_diameter**2)
+        # Ensure all required fields are present with default values if needed
+        required_fields = [
+            'depth', 'WOB', 'ROP', 'RPM', 'Torque', 'SPP', 'Flow_Rate',
+            'ECD', 'hook_load', 'MSE', 'drag_factor', 'differential_pressure',
+            'hole_cleaning_index'
+        ]
         
-        # D-exponent calculation for formation pressure indication
-        # d_exp = log(ROP / (RPM * WOB)) / log(bit diameter)
-        try:
-            bit_diameter = 8.5  # Assumed bit diameter
-            wob = max(0.1, processed_data.get('WOB', 0.1))  # Avoid log(0)
-            rpm = max(0.1, processed_data.get('RPM', 0.1))
-            rop = max(0.1, processed_data.get('ROP', 0.1))
-            
-            processed_data['d_exp'] = np.log10(rop / (rpm * wob)) / np.log10(bit_diameter)
-        except Exception as e:
-            logger.warning(f"Could not calculate d-exponent: {str(e)}")
-            processed_data['d_exp'] = 0
+        for field in required_fields:
+            if field not in processed_data:
+                processed_data[field] = 0
+                logger.warning(f"Missing field '{field}' in data, using default value 0")
         
-        # Calculate torque-drag indicators
-        # Simplified model: hookload vs. theoretical weight (TVD * string weight)
-        # Pickup drag = measured hookload / theoretical weight
-        try:
-            # Simplified calculation with assumptions
-            if 'Hook_Load' in processed_data and 'depth' in processed_data:
-                # Assume 30 lbs/ft average drillstring weight
-                avg_string_weight = 30  # lbs/ft
-                tvd = processed_data['depth'] * 0.95  # Simplified TVD calculation
-                theoretical_weight = tvd * avg_string_weight / 1000  # in klbs
+        # Ensure all change fields are present
+        change_fields = ['WOB_change', 'ROP_change', 'RPM_change', 'Torque_change', 'SPP_change', 'Flow_Rate_change']
+        for field in change_fields:
+            if field not in processed_data:
+                base_field = field.split('_')[0]
+                processed_data[field] = 0
+                logger.warning(f"Missing field '{field}' in data, using default value 0")
+        
+        # Ensure statistical fields are present
+        stat_fields = [
+            'wob_avg', 'wob_std', 'wob_rate',
+            'rop_avg', 'rop_std', 'rop_rate',
+            'rpm_avg', 'rpm_std', 'rpm_rate',
+            'torque_avg', 'torque_std', 'torque_rate',
+            'spp_avg', 'spp_std', 'spp_rate',
+            'flow_rate_avg', 'flow_rate_std', 'flow_rate_rate'
+        ]
+        
+        for field in stat_fields:
+            if field not in processed_data:
+                processed_data[field] = 0
+                logger.debug(f"Missing statistical field '{field}' in data, using default value 0")
+        
+        # Calculate additional derived features if needed
+        
+        # Mechanical Specific Energy (MSE) if not already present
+        if processed_data['MSE'] == 0 and processed_data['WOB'] > 0 and processed_data['RPM'] > 0 and processed_data['ROP'] > 0:
+            bit_diameter = 8.5  # Assumed bit diameter in inches
+            wob = processed_data['WOB']  # klbs
+            rpm = processed_data['RPM']
+            torque = processed_data['Torque']  # kft-lbs
+            rop = processed_data['ROP']  # ft/hr
+            
+            # Convert to consistent units and calculate MSE
+            processed_data['MSE'] = 4 * wob * 1000 / (3.14159 * (bit_diameter ** 2)) + \
+                                   (480 * rpm * torque) / (3.14159 * (bit_diameter ** 2) * rop)
+            
+            logger.debug("Calculated MSE from basic parameters")
+        
+        # Calculate hole cleaning index if not present
+        if processed_data['hole_cleaning_index'] == 0:
+            # Simplified model based on flow rate, RPM, and ROP
+            flow_rate = processed_data['Flow_Rate']
+            rpm = processed_data['RPM']
+            rop = processed_data['ROP']
+            
+            # Higher flow rate and RPM improve hole cleaning, higher ROP reduces it
+            if flow_rate > 0 and rpm > 0:
+                processed_data['hole_cleaning_index'] = min(1.0, max(0.1, 
+                    (0.5 + 0.3 * (flow_rate / 800) + 0.2 * (rpm / 150) - 0.1 * (rop / 50))
+                ))
+                logger.debug("Calculated hole cleaning index")
+        
+        # Calculate differential pressure if not present
+        if processed_data['differential_pressure'] == 0:
+            # Simplified model using ECD and depth
+            ecd = processed_data['ECD']
+            depth = processed_data['depth']
+            
+            if ecd > 0 and depth > 0:
+                # Simple hydrostatic pressure calculation
+                mud_weight = ecd  # ppg
+                hydrostatic_pressure = 0.052 * mud_weight * depth  # psi
                 
-                processed_data['Drag_Factor'] = processed_data['Hook_Load'] / max(1, theoretical_weight)
-            else:
-                processed_data['Drag_Factor'] = 1.0
-        except Exception as e:
-            logger.warning(f"Could not calculate drag factor: {str(e)}")
-            processed_data['Drag_Factor'] = 1.0
+                # Assume a pore pressure gradient of 0.45 psi/ft (typical)
+                pore_pressure = 0.45 * depth
+                
+                # Differential pressure is the difference
+                processed_data['differential_pressure'] = max(0, hydrostatic_pressure - pore_pressure)
+                logger.debug("Calculated differential pressure")
         
-        # Calculate differential pressure
-        # Simplified: hydrostatic pressure - pore pressure
-        try:
-            # Assume pore pressure gradient of 0.465 psi/ft (normal pressure)
-            pore_pressure_gradient = 0.465
-            ecd = processed_data.get('ECD', 12.5)
-            depth = processed_data.get('depth', 10000)
+        # Calculate drag factor if not present
+        if processed_data['drag_factor'] == 0:
+            # Simplified model based on hook load and depth
+            hook_load = processed_data['hook_load']
+            depth = processed_data['depth']
             
-            hydrostatic_pressure = ecd * 0.052 * depth
-            pore_pressure = pore_pressure_gradient * depth
-            processed_data['differential_pressure'] = hydrostatic_pressure - pore_pressure
-        except Exception as e:
-            logger.warning(f"Could not calculate differential pressure: {str(e)}")
-            processed_data['differential_pressure'] = 500  # Default value
+            if hook_load > 0 and depth > 0:
+                # Very simplified model - in reality this would be more complex
+                drill_string_weight = depth * 0.02  # Assume 20 lbs per foot of drill string
+                theoretical_hook_load = drill_string_weight
+                
+                if theoretical_hook_load > 0:
+                    processed_data['drag_factor'] = min(1.0, max(0.1, hook_load / theoretical_hook_load))
+                    logger.debug("Calculated drag factor")
         
-        # Calculate hole cleaning indicators
-        try:
-            # Simplified hole cleaning efficiency calculation
-            # Higher ratio of ECD to mud weight indicates worse hole cleaning
-            mud_weight = ecd - 0.2  # Approximation of mud weight from ECD
-            processed_data['hole_cleaning_index'] = ecd / max(mud_weight, 8.0)
-        except Exception as e:
-            logger.warning(f"Could not calculate hole cleaning index: {str(e)}")
-            processed_data['hole_cleaning_index'] = 1.0
-        
-        # Process time series data if available
-        if 'time_series' in processed_data:
-            # Calculate rolling average and standard deviation for key parameters
-            time_series = processed_data['time_series']
-            
-            # Convert to pandas DataFrame for easier manipulation
-            time_series_df = pd.DataFrame(time_series)
-            
-            # Calculate rolling statistics (window of 10 points)
-            for param in ['WOB', 'ROP', 'RPM', 'Torque', 'SPP', 'Flow_Rate']:
-                if param in time_series_df.columns:
-                    # Calculate 10-point rolling average
-                    rolling_avg = time_series_df[param].rolling(window=10, min_periods=1).mean()
-                    time_series_df[f'{param}_rolling_avg'] = rolling_avg
-                    
-                    # Calculate 10-point rolling standard deviation
-                    rolling_std = time_series_df[param].rolling(window=10, min_periods=1).std()
-                    time_series_df[f'{param}_rolling_std'] = rolling_std
-                    
-                    # Calculate rate of change (derivative)
-                    time_series_df[f'{param}_rate'] = time_series_df[param].diff()
-            
-            # Add rolling statistics to the processed data
-            processed_data['time_series'] = time_series_df.to_dict('list')
-            
-            # Extract latest statistics for model input
-            latest_idx = -1  # Last data point
-            for param in ['WOB', 'ROP', 'RPM', 'Torque', 'SPP', 'Flow_Rate']:
-                if f'{param}_rolling_avg' in time_series_df.columns:
-                    processed_data[f'{param}_avg'] = time_series_df[f'{param}_rolling_avg'].iloc[latest_idx]
-                    processed_data[f'{param}_std'] = time_series_df[f'{param}_rolling_std'].iloc[latest_idx]
-                    processed_data[f'{param}_rate'] = time_series_df[f'{param}_rate'].iloc[latest_idx]
+        # Add a timestamp if not present
+        if 'timestamp' not in processed_data:
+            processed_data['timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         logger.info("Data processing completed successfully")
         return processed_data
